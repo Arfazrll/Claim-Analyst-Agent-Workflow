@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # ---------------------------------------------------------------- build
-FROM rust:1.91-bookworm AS build
+FROM rust:1.98-bookworm AS build
 WORKDIR /src
 
 # Cache dependencies: build once with stub sources, then with the real code.
