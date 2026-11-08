@@ -1,0 +1,42 @@
+# Dev cluster (kind / minikube / k3d): local Anvil chain, small replica counts, HTTP.
+#   cp secrets.env.example secrets.env   # fill values
+#   kubectl apply -k infra/k8s/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: claim-desk
+resources:
+  - ../../base
+  - anvil.yaml
+secretGenerator:
+  - name: claim-desk-secrets
+    envs: [secrets.env]
+configMapGenerator:
+  - name: claim-desk-config
+    behavior: merge
+    literals:
+      - CORS_ORIGINS=http://claims.localhost
+      - COOKIE_SECURE=false
+patches:
+  - target: { kind: HorizontalPodAutoscaler, name: claim-api }
+    patch: |
+      - { op: replace, path: /spec/minReplicas, value: 2 }
+      - { op: replace, path: /spec/maxReplicas, value: 4 }
+  - target: { kind: PodDisruptionBudget, name: claim-api }
+    patch: |
+      - { op: replace, path: /spec/minAvailable, value: 1 }
+  - target: { kind: Deployment, name: claim-api }
+    patch: |
+      - { op: replace, path: /spec/replicas, value: 2 }
+  - target: { kind: Ingress, name: claim-desk }
+    patch: |
+      - { op: remove, path: /spec/tls }
+      - { op: replace, path: /spec/rules/0/host, value: claims.localhost }
+      - { op: replace, path: /metadata/annotations/nginx.ingress.kubernetes.io~1ssl-redirect, value: "false" }
+      - { op: replace, path: /metadata/annotations/nginx.ingress.kubernetes.io~1force-ssl-redirect, value: "false" }
+images:
+  - name: claim-api
+    newName: claim-analyst-api
+    newTag: dev
+  - name: claim-web
+    newName: claim-analyst-web
+    newTag: dev

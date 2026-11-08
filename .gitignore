@@ -1,3 +1,52 @@
-# Build folder and log file
+# Build output
 build/
 build.log
+target/
+dist/
+coverage/
+node_modules/
+*.tsbuildinfo
+
+vite.config.*.timestamp-*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Foundry
+blockchain/out/
+blockchain/cache/
+blockchain/broadcast/
+blockchain/lib/
+deployment.json
+anvil-state.json
+
+# Keys, certificates and cluster credentials (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+id_ed25519*
+kubeconfig
+*.kubeconfig
+
+# Local data and secrets (never commit)
+.env
+.env.*
+!.env.example
+**/secrets.env
+*.db
+*.db-wal
+*.db-shm
+backend/data/claims.db*
+
+# Editors / OS / local tooling
+.vscode/
+.idea/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db

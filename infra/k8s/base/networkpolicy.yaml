@@ -1,0 +1,79 @@
+# Default deny, then allow only the flows the system needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Every pod may resolve DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-to-web-and-api
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [claim-web, claim-api] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+---
+# API and worker reach the data stores, the chain RPC and HTTPS (LLM / public RPC).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-egress
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [claim-api, claim-anchor-worker] }]
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: postgres } } }]
+      ports: [{ port: 5432 }]
+    - to: [{ podSelector: { matchLabels: { app: redis } } }]
+      ports: [{ port: 6379 }]
+    - to: [{ podSelector: { matchLabels: { app: ipfs } } }]
+      ports: [{ port: 5001 }]
+    - to: [{ podSelector: { matchLabels: { app: anvil } } }]
+      ports: [{ port: 8545 }]
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] } }]
+      ports: [{ port: 443 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-stores-from-api-only
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [postgres, redis, ipfs, anvil] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions: [{ key: app, operator: In, values: [claim-api, claim-anchor-worker, contract-deployer] }]
+---
+# IPFS joins the public swarm to replicate pinned bundles.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ipfs-swarm
+spec:
+  podSelector: { matchLabels: { app: ipfs } }
+  policyTypes: [Egress]
+  egress:
+    - ports: [{ port: 4001 }, { port: 443 }]

@@ -1,0 +1,31 @@
+# Production: anchors to the Sepolia public testnet (free; swap the RPC/chain id for a
+# mainnet or L2 later). Deploy ClaimLedger once with Foundry, then put its address here:
+#   forge create blockchain/src/ClaimLedger.sol:ClaimLedger --rpc-url $SEPOLIA_RPC \
+#     --private-key $DEPLOYER_KEY --broadcast --constructor-args $WRITER_ADDRESS
+# Secrets should come from an external secret manager; secretGenerator is a fallback.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: claim-desk
+resources:
+  - ../../base
+secretGenerator:
+  - name: claim-desk-secrets
+    envs: [secrets.env]
+configMapGenerator:
+  - name: claim-desk-config
+    behavior: merge
+    literals:
+      - CORS_ORIGINS=https://claims.example.com
+      - CHAIN_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+      - CHAIN_ID=11155111
+      - CHAIN_CONTRACT_ADDRESS=0x0000000000000000000000000000000000000000
+      - CHAIN_EXPLORER_URL=https://sepolia.etherscan.io
+      - ALLOW_REGISTRATION=false
+# Image tags are set by the CD pipeline (kustomize edit set image ...@sha256:...).
+images:
+  - name: claim-api
+    newName: ghcr.io/OWNER/claim-analyst-api
+    newTag: latest
+  - name: claim-web
+    newName: ghcr.io/OWNER/claim-analyst-web
+    newTag: latest

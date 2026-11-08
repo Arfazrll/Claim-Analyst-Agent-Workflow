@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  backend:
+    name: Backend (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Evaluation gate (decision accuracy, amounts, verifier power, determinism)
+        run: cargo run -q --locked -p claim-engine --bin claim-eval
+
+  backend-audit:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit --file backend/Cargo.lock
+
+  frontend:
+    name: Frontend (Vue)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  contracts:
+    name: Smart contract (Foundry)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blockchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Formatting (advisory)
+        run: forge fmt --check
+        continue-on-error: true
+      - run: forge build --sizes
+      - run: forge test -vvv
+        env:
+          FOUNDRY_PROFILE: ci
+
+  manifests:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Render overlays
+        run: |
+          for env in dev prod; do
+            cp infra/k8s/overlays/$env/secrets.env.example infra/k8s/overlays/$env/secrets.env
+            kubectl kustomize infra/k8s/overlays/$env > /tmp/$env.yaml
+          done
+      - name: Validate against Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary -ignore-missing-schemas /tmp/dev.yaml /tmp/prod.yaml
+
+  secrets-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.0 detect --source /repo --config /repo/.gitleaks.toml --redact --verbose
+
+  e2e:
+    name: Docker stack + end-to-end smoke test
+    needs: [backend, frontend, contracts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Generate secrets
+        run: sh scripts/gen-secrets.sh
+      - name: Build and start
+        run: docker compose up --build -d
+      - name: Smoke test (claim -> decision -> ledger -> IPFS -> on-chain proof -> rate limit)
+        run: sh scripts/smoke.sh http://localhost:8080
+      - name: Scan images (HIGH/CRITICAL, fixable)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: claim-analyst-agent-workflow-api
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

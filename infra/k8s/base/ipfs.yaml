@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ipfs
+  labels: { app: ipfs }
+spec:
+  serviceName: ipfs
+  replicas: 1
+  selector:
+    matchLabels: { app: ipfs }
+  template:
+    metadata:
+      labels: { app: ipfs }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: kubo
+          image: ipfs/kubo:v0.34.1
+          env:
+            - { name: IPFS_PROFILE, value: server }
+          ports:
+            - { name: api, containerPort: 5001 }
+            - { name: swarm, containerPort: 4001 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          readinessProbe:
+            tcpSocket: { port: api }
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /data/ipfs }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 10Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ipfs
+  labels: { app: ipfs }
+spec:
+  selector: { app: ipfs }
+  ports: [{ name: api, port: 5001, targetPort: api }]

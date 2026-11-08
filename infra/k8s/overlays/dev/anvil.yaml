@@ -1,0 +1,91 @@
+# Local EVM chain + one-shot ClaimLedger deployment (dev only). On a fresh Anvil the
+# first contract deployed by account #0 always lands at
+# 0x5FbDB2315678afecb367f032d93F642f64180aa3, which the ConfigMap already points to.
+# If the Anvil pod restarts the chain resets: delete and re-apply the Job.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anvil
+  labels: { app: anvil }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: anvil }
+  template:
+    metadata:
+      labels: { app: anvil }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: anvil
+          image: ghcr.io/foundry-rs/foundry:stable
+          command: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337"]
+          ports: [{ name: rpc, containerPort: 8545 }]
+          readinessProbe:
+            tcpSocket: { port: rpc }
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anvil
+  labels: { app: anvil }
+spec:
+  selector: { app: anvil }
+  ports: [{ name: rpc, port: 8545, targetPort: rpc }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deploy-claim-ledger
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app: contract-deployer }
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: deploy
+          image: claim-analyst-contracts:dev
+          env:
+            - { name: RPC_URL, value: http://anvil:8545 }
+            - { name: DEPLOYMENT_FILE, value: /shared/deployment.json }
+            - name: DEPLOYER_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: claim-desk-secrets, key: CHAIN_DEPLOYER_PRIVATE_KEY } }
+            - name: WRITER_ADDRESS
+              valueFrom: { secretKeyRef: { name: claim-desk-secrets, key: CHAIN_WRITER_ADDRESS } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts: [{ name: shared, mountPath: /shared }]
+      volumes: [{ name: shared, emptyDir: {} }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deployer-egress
+spec:
+  podSelector: { matchLabels: { app: contract-deployer } }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: anvil } } }]
+      ports: [{ port: 8545 }]

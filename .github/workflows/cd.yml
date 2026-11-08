@@ -1,0 +1,142 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: Build, sign and push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless cosign signing
+    outputs:
+      api-digest: ${{ steps.api.outputs.digest }}
+      web-digest: ${{ steps.web.outputs.digest }}
+      contracts-digest: ${{ steps.contracts.outputs.digest }}
+    strategy:
+      fail-fast: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+
+      - id: meta-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/claim-analyst-api
+          tags: |
+            type=sha
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - id: meta-web
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/claim-analyst-web
+          tags: |
+            type=sha
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - id: meta-contracts
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/claim-analyst-contracts
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      - id: contracts
+        uses: docker/build-push-action@v6
+        with:
+          context: blockchain
+          push: true
+          tags: ${{ steps.meta-contracts.outputs.tags }}
+          cache-from: type=gha,scope=contracts
+          cache-to: type=gha,mode=max,scope=contracts
+
+      - name: Sign images (keyless, Sigstore)
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          cosign sign --yes ghcr.io/${OWNER}/claim-analyst-api@${{ steps.api.outputs.digest }}
+          cosign sign --yes ghcr.io/${OWNER}/claim-analyst-web@${{ steps.web.outputs.digest }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: images
+    runs-on: ubuntu-latest
+    # Requires approval when the "production" environment has protection rules.
+    environment: production
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Configure cluster access
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Write secrets
+        env:
+          PROD_SECRETS_ENV: ${{ secrets.PROD_SECRETS_ENV }}
+        run: printf '%s' "$PROD_SECRETS_ENV" > infra/k8s/overlays/prod/secrets.env
+      - name: Pin images by digest
+        working-directory: infra/k8s/overlays/prod
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          kubectl kustomize . >/dev/null
+          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz" | tar xz
+          ./kustomize edit set image claim-api=ghcr.io/${OWNER}/claim-analyst-api@${{ needs.images.outputs.api-digest }}
+          ./kustomize edit set image claim-web=ghcr.io/${OWNER}/claim-analyst-web@${{ needs.images.outputs.web-digest }}
+      - name: Apply
+        run: kubectl apply -k infra/k8s/overlays/prod
+      - name: Wait for rollout
+        run: |
+          kubectl -n claim-desk rollout status deployment/claim-api --timeout=300s
+          kubectl -n claim-desk rollout status deployment/claim-web --timeout=300s
+          kubectl -n claim-desk rollout status deployment/claim-anchor-worker --timeout=300s
+      - name: Remove secrets file
+        if: always()
+        run: rm -f infra/k8s/overlays/prod/secrets.env ~/.kube/config

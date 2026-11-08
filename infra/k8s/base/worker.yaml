@@ -1,0 +1,37 @@
+# Anchor worker: pins ledger entries to IPFS and anchors them on-chain. Exactly one
+# replica, replaced with Recreate, because a single signer key has one nonce sequence.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claim-anchor-worker
+  labels: { app: claim-anchor-worker }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: claim-anchor-worker }
+  template:
+    metadata:
+      labels: { app: claim-anchor-worker }
+    spec:
+      serviceAccountName: claim-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: worker
+          image: claim-api
+          args: ["worker"]
+          envFrom:
+            - configMapRef: { name: claim-desk-config }
+            - secretRef: { name: claim-desk-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
