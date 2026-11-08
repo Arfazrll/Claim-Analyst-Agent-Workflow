@@ -130,7 +130,7 @@ jobs:
       - name: Smoke test (claim -> decision -> ledger -> IPFS -> on-chain proof -> rate limit)
         run: sh scripts/smoke.sh http://localhost:8080
       - name: Scan images (HIGH/CRITICAL, fixable)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: claim-analyst-agent-workflow-api
