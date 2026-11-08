@@ -7,7 +7,7 @@ COPY . .
 RUN npm run build
 
 # Unprivileged nginx (uid 101, port 8080) serving the built SPA.
-FROM nginxinc/nginx-unprivileged:1.27.5-alpine
+FROM nginxinc/nginx-unprivileged:1.31.7-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
