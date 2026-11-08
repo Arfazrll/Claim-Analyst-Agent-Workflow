@@ -109,7 +109,7 @@ jobs:
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
       - name: Configure cluster access
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
