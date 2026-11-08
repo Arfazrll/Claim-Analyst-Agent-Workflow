@@ -46,12 +46,6 @@ Only cryptographic fingerprints are anchored to an EVM smart contract and the en
 bundles are pinned to IPFS, so anyone can prove a record was not altered without any
 health data ever being published.
 
-The project is a Rust and Vue re-engineering of
-[aptino-claim-engine](https://github.com/ByteNinjaSmit/aptino-claim-engine) (Python,
-FastAPI, Streamlit), extended from a stateless prototype into a multi-user, persistent,
-horizontally scalable product. The policy chunks and labelled test cases originate from
-that repository.
-
 <p align="center">
   <img src="docs/images/claim-decision.png" alt="Claim detail page showing the decision stamp, case file and cited findings" width="900">
 </p>
